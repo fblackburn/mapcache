@@ -87,6 +87,7 @@ typedef struct mapcache_image_format_mixed mapcache_image_format_mixed;
 typedef struct mapcache_image_format_png mapcache_image_format_png;
 typedef struct mapcache_image_format_png_q mapcache_image_format_png_q;
 typedef struct mapcache_image_format_jpeg mapcache_image_format_jpeg;
+typedef struct mapcache_image_format_utfgrid mapcache_image_format_utfgrid;
 typedef struct mapcache_cfg mapcache_cfg;
 typedef struct mapcache_tileset mapcache_tileset;
 typedef struct mapcache_cache mapcache_cache;
@@ -130,6 +131,7 @@ typedef struct mapcache_service_mapguide mapcache_service_mapguide;
 typedef struct mapcache_service_demo mapcache_service_demo;
 typedef struct mapcache_server_cfg mapcache_server_cfg;
 typedef struct mapcache_image mapcache_image;
+typedef struct mapcache_utf_data mapcache_utf_data;
 typedef struct mapcache_grid mapcache_grid;
 typedef struct mapcache_grid_level mapcache_grid_level;
 typedef struct mapcache_grid_link mapcache_grid_link;
@@ -843,7 +845,7 @@ void mapcache_service_dispatch_request(mapcache_context *ctx,
 /** @{ */
 
 typedef enum {
-  GC_UNKNOWN, GC_PNG, GC_JPEG
+  GC_UNKNOWN, GC_PNG, GC_JPEG, GC_UTFGRID
 } mapcache_image_format_type;
 
 typedef enum {
@@ -854,6 +856,17 @@ typedef enum {
   MC_ALPHA_UNKNOWN, MC_ALPHA_YES, MC_ALPHA_NO
 } mapcache_image_alpha_type;
 
+//TODO find a better way to handle different image data format.
+typedef enum {
+  MC_RGBA, MC_UTFDATA
+} mapcache_image_data_type;
+
+//Struct to contain utf grid value.
+struct mapcache_utf_data {
+  uint32_t utfValue;
+  char* utfItem;
+  char* utfData;
+};
 
 /**\class mapcache_image
  * \brief representation of an RGBA image
@@ -867,7 +880,9 @@ struct mapcache_image {
   size_t stride; /**< stride of an image row */
   mapcache_image_blank_type is_blank;
   mapcache_image_alpha_type has_alpha;
-
+  mapcache_image_data_type data_type; //TODO find a better way to handle different image data format.
+  int nb_utf_item; /** Number of different data key in the current utfgrid*/
+  mapcache_utf_data *utfGridValue; /**< pointer to the beginning of utfgrid data */
 };
 
 /** \def GET_IMG_PIXEL
@@ -884,6 +899,7 @@ struct mapcache_image {
  * \brief initialize a new mapcache_image
  */
 mapcache_image* mapcache_image_create(mapcache_context *ctx);
+mapcache_image* mapcache_image_utfgrid_create(mapcache_context *ctx);
 mapcache_image* mapcache_image_create_with_data(mapcache_context *ctx, int width, int height);
 
 void mapcache_image_copy_resampled_nearest(mapcache_context *ctx, mapcache_image *src, mapcache_image *dst,
@@ -1622,6 +1638,36 @@ mapcache_image* _mapcache_imageio_jpeg_decode(mapcache_context *ctx, mapcache_bu
  */
 void _mapcache_imageio_jpeg_decode_to_image(mapcache_context *ctx, mapcache_buffer *buffer,
     mapcache_image *image);
+
+/** @} */
+
+/**\defgroup imageio_utfgrid UTFGRID Image IO
+ * \ingroup imageio */
+/** @{ */
+
+/**\class mapcache_image_format_utfgrid
+ * \brief UTFGRID image format
+ * \extends mapcache_image_format
+ */
+struct mapcache_image_format_utfgrid {
+  mapcache_image_format format;
+};
+
+mapcache_image_format* mapcache_imageio_create_utfgrid_format(apr_pool_t *pool, char *name);
+
+/**
+ * @param r
+ * @param buffer
+ * @return
+ */
+mapcache_image* _mapcache_imageio_utfgrid_decode(mapcache_context *ctx, mapcache_buffer *buffer);
+
+/**
+ * @param r
+ * @param buffer
+ * @return
+ */
+void _mapcache_imageio_utfgrid_decode_to_image(mapcache_context *ctx, mapcache_buffer *buffer, mapcache_image *image);
 
 /** @} */
 

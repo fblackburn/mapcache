@@ -314,6 +314,8 @@ mapcache_http_response *mapcache_core_get_tile(mapcache_context *ctx, mapcache_r
     apr_table_set(response->headers,"Content-Type","image/png");
   else if(t == GC_JPEG)
     apr_table_set(response->headers,"Content-Type","image/jpeg");
+  else if(t == GC_UTFGRID)
+    apr_table_set(response->headers,"Content-Type","application/json"); //todo: find better way to handle multiple format
 
   /* compute expiry headers */
   if(expires) {

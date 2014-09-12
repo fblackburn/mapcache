@@ -41,6 +41,22 @@ mapcache_image* mapcache_image_create(mapcache_context *ctx)
   img->data=NULL;
   img->has_alpha = MC_ALPHA_UNKNOWN;
   img->is_blank = MC_EMPTY_UNKNOWN;
+  img->data_type = MC_RGBA;
+  img->nb_utf_item = 0;
+  img->utfGridValue = NULL;
+  return img;
+}
+
+mapcache_image* mapcache_image_utfgrid_create(mapcache_context *ctx)
+{
+  mapcache_image *img = (mapcache_image*)apr_pcalloc(ctx->pool,sizeof(mapcache_image));
+  img->w= img->h= 0;
+  img->data=NULL;
+  img->has_alpha = MC_ALPHA_UNKNOWN;
+  img->is_blank = MC_EMPTY_NO; //FIXME setted this way to bypass the empty validation when rendering the json file.
+  img->data_type = MC_UTFDATA;
+  img->nb_utf_item = 0;
+  img->utfGridValue = NULL;
   return img;
 }
 
@@ -53,6 +69,9 @@ mapcache_image* mapcache_image_create_with_data(mapcache_context *ctx, int width
   img->stride = 4 * width;
   img->has_alpha = MC_ALPHA_UNKNOWN;
   img->is_blank = MC_EMPTY_UNKNOWN;
+  img->data_type = MC_RGBA;
+  img->nb_utf_item = 0;
+  img->utfGridValue = NULL;
   return img;
 }
 
@@ -289,37 +308,78 @@ void mapcache_image_metatile_split(mapcache_context *ctx, mapcache_metatile *mt)
       ctx->set_error(ctx, 500, "failed to load image data from metatile");
       return;
     }
-    for(i=0; i<mt->metasize_x; i++) {
-      for(j=0; j<mt->metasize_y; j++) {
-        tileimg = mapcache_image_create(ctx);
-        tileimg->w = mt->map.grid_link->grid->tile_sx;
-        tileimg->h = mt->map.grid_link->grid->tile_sy;
-        tileimg->stride = metatile->stride;
-        switch(mt->map.grid_link->grid->origin) {
-          case MAPCACHE_GRID_ORIGIN_BOTTOM_LEFT:
-            sx = mt->map.tileset->metabuffer + i * tileimg->w;
-            sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
-            break;
-          case MAPCACHE_GRID_ORIGIN_TOP_LEFT:
-            sx = mt->map.tileset->metabuffer + i * tileimg->w;
-            sy = mt->map.tileset->metabuffer + j * tileimg->h;
-            break;
-          case MAPCACHE_GRID_ORIGIN_BOTTOM_RIGHT: /* FIXME not implemented */
-            sx = mt->map.tileset->metabuffer + i * tileimg->w;
-            sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
-            break;
-          case MAPCACHE_GRID_ORIGIN_TOP_RIGHT:  /* FIXME not implemented */
-            sx = mt->map.tileset->metabuffer + i * tileimg->w;
-            sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
-            break;
+    if(metatile->data_type == MC_UTFDATA)
+    {
+      int utfResolution = mt->map.width / metatile->w;
+
+      int char_no, line_cmpt, img_index;
+
+      char* utfChar;
+
+      for(i=0; i<mt->metasize_x; i++) {
+        for(j=0; j<mt->metasize_y; j++) {
+          tileimg = mapcache_image_utfgrid_create(ctx);
+          tileimg->w = mt->map.grid_link->grid->tile_sx / utfResolution;
+          tileimg->h = mt->map.grid_link->grid->tile_sy / utfResolution;
+
+          tileimg->data = calloc(tileimg->w*tileimg->h,sizeof(int32_t));
+          apr_pool_cleanup_register(ctx->pool, tileimg->data, (void*)free, apr_pool_cleanup_null);
+
+          sx = (mt->map.tileset->metabuffer/utfResolution) + i * tileimg->w;
+          sy = (mt->map.tileset->metabuffer/utfResolution) + (j * tileimg->h);
+
+          img_index = 0;
+
+          for (line_cmpt = 0; line_cmpt < tileimg->h; line_cmpt ++)
+          {
+            for(char_no = sx + ((sy + line_cmpt) * metatile->w); char_no < sx+((sy + line_cmpt) * metatile->w)+tileimg->w; char_no ++)
+            {
+              memcpy((void*)(&tileimg->data[img_index]), (void*)(&metatile->data[char_no]),sizeof(int32_t));
+              img_index ++;
+            }
+          }
+
+          tileimg->nb_utf_item = metatile->nb_utf_item;
+          tileimg->utfGridValue = metatile->utfGridValue;
+
+          mt->tiles[i*mt->metasize_y+j].raw_image = tileimg;
+          GC_CHECK_ERROR(ctx);
+
         }
-        tileimg->data = &(metatile->data[sy*metatile->stride + 4 * sx]);
-        if(mt->map.tileset->watermark) {
-          mapcache_image_merge(ctx,tileimg,mt->map.tileset->watermark);
+      }
+    } else {
+      for(i=0; i<mt->metasize_x; i++) {
+        for(j=0; j<mt->metasize_y; j++) {
+          tileimg = mapcache_image_create(ctx);
+          tileimg->w = mt->map.grid_link->grid->tile_sx;
+          tileimg->h = mt->map.grid_link->grid->tile_sy;
+          tileimg->stride = metatile->stride;
+          switch(mt->map.grid_link->grid->origin) {
+            case MAPCACHE_GRID_ORIGIN_BOTTOM_LEFT:
+              sx = mt->map.tileset->metabuffer + i * tileimg->w;
+              sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
+              break;
+            case MAPCACHE_GRID_ORIGIN_TOP_LEFT:
+              sx = mt->map.tileset->metabuffer + i * tileimg->w;
+              sy = mt->map.tileset->metabuffer + j * tileimg->h;
+              break;
+            case MAPCACHE_GRID_ORIGIN_BOTTOM_RIGHT: /* FIXME not implemented */
+              sx = mt->map.tileset->metabuffer + i * tileimg->w;
+              sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
+              break;
+            case MAPCACHE_GRID_ORIGIN_TOP_RIGHT:  /* FIXME not implemented */
+              sx = mt->map.tileset->metabuffer + i * tileimg->w;
+              sy = mt->map.height - (mt->map.tileset->metabuffer + (j+1) * tileimg->h);
+              break;
+          }
+          tileimg->data = &(metatile->data[sy*metatile->stride + 4 * sx]);
+          if(mt->map.tileset->watermark) {
+            mapcache_image_merge(ctx,tileimg,mt->map.tileset->watermark);
+            GC_CHECK_ERROR(ctx);
+          }
+          mt->tiles[i*mt->metasize_y+j].raw_image = tileimg;
           GC_CHECK_ERROR(ctx);
         }
-        mt->tiles[i*mt->metasize_y+j].raw_image = tileimg;
-        GC_CHECK_ERROR(ctx);
       }
     }
   } else {

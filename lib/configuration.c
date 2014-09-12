@@ -172,6 +172,7 @@ mapcache_cfg* mapcache_configuration_create(apr_pool_t *pool)
   mapcache_configuration_add_image_format(cfg,
           mapcache_imageio_create_jpeg_format(pool,"JPEG",90,MAPCACHE_PHOTOMETRIC_YCBCR),
           "JPEG");
+  mapcache_configuration_add_image_format(cfg, mapcache_imageio_create_utfgrid_format(pool,"UTFGRID"), "UTFGRID");
   mapcache_configuration_add_image_format(cfg,
           mapcache_imageio_create_mixed_format(pool,"mixed",
                     mapcache_configuration_get_image_format(cfg,"PNG"),
