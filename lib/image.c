@@ -334,7 +334,7 @@ void mapcache_image_metatile_split(mapcache_context *ctx, mapcache_metatile *mt)
           {
             for(char_no = sx + ((sy + line_cmpt) * metatile->w); char_no < sx+((sy + line_cmpt) * metatile->w)+tileimg->w; char_no ++)
             {
-              memcpy((void*)(&tileimg->data[img_index]), (void*)(&metatile->data[char_no]),sizeof(int32_t));
+              memcpy((void*)(&tileimg->data[img_index*4]), (void*)(&metatile->data[char_no*4]),sizeof(int32_t));
               img_index ++;
             }
           }

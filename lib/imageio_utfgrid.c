@@ -80,7 +80,10 @@ void _mapcache_imageio_utfgrid_decode_to_image(mapcache_context *r, mapcache_buf
       nbByte = msGetNextGlyph(&value,out_string);
       char_code = get_utf_char_code(out_string, nbByte);
 
-      memcpy((void*)(&img->data[(i*img->w)+j]),(void*)(&char_code),sizeof(int32_t));
+      if(i*img->w+j == 209)
+        printf("Char:%s nbByte:%d char_code:%d index:%d\n", out_string, nbByte, char_code, i*img->w+j);
+
+      memcpy((void*)(&img->data[(i*img->w+j)*4]),(void*)(&char_code),sizeof(int32_t));
     }
   }
 
@@ -124,9 +127,9 @@ int utf_encode(int valueKey)
 
 int utf_decode(int valueKey)
 {
-  if(valueKey > 92)
+  if(valueKey >= 92)
     valueKey --;
-  if(valueKey > 34)
+  if(valueKey >= 34)
     valueKey --;
 
   valueKey -= 32;
@@ -172,6 +175,10 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
 {
   int byte_size, i, j;
   mapcache_buffer* grid_line = NULL;
+  mapcache_utf_data* updatedData;
+  int elementInGrid;
+
+  elementInGrid = utfgridCleanData(ctx, img, &updatedData);
   
   char* utf_buffer = (char*)apr_pcalloc(ctx->pool,7 * sizeof(char));
 
@@ -188,7 +195,7 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
 
     for(j=0;j<img->w;j++)
     {
-      byte_size = wc_to_utf8(utf_buffer, img->data[(img->w * i)+j]);
+      byte_size = wc_to_utf8(utf_buffer, img->data[((img->w * i)+j)*4]);
       mapcache_buffer_append(grid_line, byte_size, utf_buffer);
     }
     tempString = json_object_new_string(grid_line->buf);
@@ -210,7 +217,7 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
   utf_key = json_object_new_string("");
   json_object_array_add(utf_key_array,utf_key);
 
-  for(i=0;i<img->nb_utf_item;i++)
+  for(i=0;i<elementInGrid;i++)
   {
     utf_data = &img->utfGridValue[i];
 
@@ -427,17 +434,32 @@ int wc_to_utf8(char *utf8char, int32_t char_code)
   return len;
 }
 
-/*Compress utfgrid data to show only relevant information*/
+/*Update a char by the new one in the data*/
 
-unsigned char* utfgridCleanData(mapcache_image *img)
+void utfgridUpdateChar(mapcache_image *img, uint32_t oldChar, uint32_t newChar)
 {
-  unsigned char* usedChar;
-  int i,bufferLength,itemFound,dataCounter;
-  unsigned char utfvalue;
+  int i,bufferLength;
 
   bufferLength = img->h * img->w;
 
-  usedChar =(unsigned char*) apr_pcalloc(img->nb_utf_item,sizeof(unsigned char));
+  for(i=0;i<bufferLength;i++){
+    if(img->data[i*4] == oldChar)
+      img->data[i*4] = newChar;
+  }
+}
+
+/*Compress utfgrid data to show only relevant information*/
+
+int utfgridCleanData(mapcache_context *ctx, mapcache_image *img, mapcache_utf_data **dataPointer)
+{
+  int * usedChar;
+  int i,bufferLength,itemFound,dataCounter,itemInArray;
+  unsigned char utfvalue;
+  mapcache_utf_data* updatedData;
+
+  bufferLength = img->h * img->w;
+
+  usedChar = (int*)apr_pcalloc(ctx->pool, img->nb_utf_item*sizeof(int));
 
   for(i=0;i<img->nb_utf_item;i++){
     usedChar[i]=0;
@@ -447,44 +469,49 @@ unsigned char* utfgridCleanData(mapcache_image *img)
 
   for(i=0;i<bufferLength;i++)
   {
-    if(decodeRendered(r->buffer[i]) != 0 && usedChar[decodeRendered(r->buffer[i])-1]==0)
+    if(utf_decode(img->data[i*4]) != 0 && usedChar[utf_decode(img->data[i*4])-1]==0)
     {
       itemFound++;
-      usedChar[decodeRendered(r->buffer[i])-1] = 1;
+      usedChar[utf_decode(img->data[i*4])-1] = 1;
+      printf("data:%d, value:%d, itemfound:%d\n",img->data[i*4],utf_decode(img->data[i*4])-1,itemFound);
     }
   }
+  
+  itemInArray = 0;
 
-  updatedData = (shapeData*) msSmallMalloc(itemFound * sizeof(shapeData));
+  for(i=0; i<img->nb_utf_item; i++)
+  {
+    if(usedChar[i] == 1)
+      itemInArray ++;
+  }
+
+  printf("Item in array:%d\nItem Found:%d\n",itemInArray, itemFound);
+
+  updatedData = *dataPointer;
+
+  updatedData = (mapcache_utf_data*)apr_pcalloc(ctx->pool, itemInArray*sizeof(mapcache_utf_data));
   dataCounter = 0;
 
-  for(i=0; i< r->data->counter; i++){
-    if(usedChar[decodeRendered(r->data->table[i].utfvalue)-1]==1){
-        updatedData[dataCounter] = r->data->table[i];
+  for(i=0; i< img->nb_utf_item; i++){
+    if(usedChar[utf_decode(img->utfGridValue[i].utfValue)-1]==1){
+      memcpy((void*)(&updatedData[dataCounter]),(void*)(&img->utfGridValue[i]),sizeof(mapcache_utf_data));
 
-        updatedData[dataCounter].serialid=dataCounter+1;
+      utfvalue=utf_encode(dataCounter+1);
 
-        utfvalue=encodeForRendering(dataCounter+1);
-
-        utfgridUpdateChar(img,updatedData[dataCounter].utfvalue,utfvalue);
-        updatedData[dataCounter].utfvalue = utfvalue;
+      utfgridUpdateChar(img,updatedData[dataCounter].utfValue,utfvalue);
+      updatedData[dataCounter].utfValue = utfvalue;
 
       dataCounter++;
-    }
-    else {
-      if(r->data->table[i].datavalues)
-        msFree(r->data->table[i].datavalues);
-      if(r->data->table[i].itemvalue)
-        msFree(r->data->table[i].itemvalue);
+      usedChar[utf_decode(img->utfGridValue[i].utfValue)-1] = 0;
     }
   }
 
-  msFree(usedChar);
+  printf("Missed stuff:\n");
+  for(i=0; i<img->nb_utf_item; i++)
+  {
+    if(usedChar[i] == 1)
+      printf("%d\n",i);
+  }
 
-  msFree(r->data->table);
-
-  r->data->table = updatedData;
-  r->data->counter = dataCounter;
-  r->data->size = dataCounter;
-
-  return MS_SUCCESS;
+  return itemInArray;
 }
