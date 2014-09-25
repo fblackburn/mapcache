@@ -38,20 +38,19 @@ void _mapcache_imageio_utfgrid_decode_to_image(mapcache_context *r, mapcache_buf
   json_object *utfData;
   json_object *curDataObject;
 
-  int nbchar, bufferBaseSize, nbData;
+  int nbchar, bufferBaseSize, nbData, dataSize;
+  char* charBuffer = NULL;
   char* out_string = NULL;
   char* value = NULL;
   char* utfKey = NULL;
   char* utfDataValue = NULL;
-
-  json_tokener *tok = json_tokener_new();
 
   int i, j;
   int nbByte;
 
   int32_t char_code;
 
-  utfGridObject = json_tokener_parse_ex(tok, ((char*)buffer->buf), buffer->size);
+  utfGridObject = json_tokener_parse((char*)buffer->buf);
 
   gridJson = json_object_object_get(utfGridObject,"grid");
   utfData = json_object_object_get(utfGridObject,"data");
@@ -80,9 +79,6 @@ void _mapcache_imageio_utfgrid_decode_to_image(mapcache_context *r, mapcache_buf
       nbByte = msGetNextGlyph(&value,out_string);
       char_code = get_utf_char_code(out_string, nbByte);
 
-      if(i*img->w+j == 209)
-        printf("Char:%s nbByte:%d char_code:%d index:%d\n", out_string, nbByte, char_code, i*img->w+j);
-
       memcpy((void*)(&img->data[(i*img->w+j)*4]),(void*)(&char_code),sizeof(int32_t));
     }
   }
@@ -98,19 +94,29 @@ void _mapcache_imageio_utfgrid_decode_to_image(mapcache_context *r, mapcache_buf
     img->utfGridValue[i].utfValue = utf_encode(i+1);
 
     curDataObject = json_object_iter_peek_value(&iterCur);
-    utfDataValue = (char*) apr_pcalloc(r->pool, json_object_get_string_len(curDataObject) * sizeof(char));
     utfDataValue = json_object_get_string(curDataObject);
-    img->utfGridValue[i].utfData = utfDataValue;
+    dataSize = strlen(utfDataValue);
 
-    utfKey = (char*) apr_pcalloc(r->pool, strlen(json_object_iter_peek_name(&iterCur)) * sizeof(char));
+    charBuffer = (char*) apr_pcalloc(r->pool, dataSize * sizeof(char));
+
+    memcpy((void*)charBuffer,(void*)utfDataValue, dataSize);
+    img->utfGridValue[i].utfData = charBuffer;
+
     utfKey = json_object_iter_peek_name(&iterCur);
-    img->utfGridValue[i].utfItem = utfKey;
+    dataSize = strlen(utfKey);
+    charBuffer = (char*) apr_pcalloc(r->pool, (dataSize+1) * sizeof(char));
+
+    memcpy((void*)charBuffer, (void*)utfKey, dataSize);
+    img->utfGridValue[i].utfItem = charBuffer;
 
     i++;
     json_object_iter_next(&iterCur);
   }
 
-  json_tokener_free(tok);
+  json_object_put(utfGridObject);
+  json_object_put(gridJson);
+  json_object_put(utfData);
+  json_object_put(curDataObject);
 }
 
 int utf_encode(int valueKey)
@@ -178,6 +184,8 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
   mapcache_utf_data* updatedData;
   int elementInGrid;
 
+  int32_t *char_code;
+
   elementInGrid = utfgridCleanData(ctx, img, &updatedData);
   
   char* utf_buffer = (char*)apr_pcalloc(ctx->pool,7 * sizeof(char));
@@ -195,10 +203,12 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
 
     for(j=0;j<img->w;j++)
     {
-      byte_size = wc_to_utf8(utf_buffer, img->data[((img->w * i)+j)*4]);
+      char_code = &img->data[((img->w * i)+j)*4];
+
+      byte_size = wc_to_utf8(utf_buffer, *char_code);
       mapcache_buffer_append(grid_line, byte_size, utf_buffer);
     }
-    tempString = json_object_new_string(grid_line->buf);
+    tempString = json_object_new_string_len(grid_line->buf, grid_line->size);
     json_object_array_add(grid,tempString);
   }
 
@@ -231,10 +241,19 @@ mapcache_buffer* _mapcache_imageio_utfgrid_encode(mapcache_context *ctx, mapcach
   json_object_object_add(trunk,"keys",utf_key_array);
   json_object_object_add(trunk,"data",utf_data_element);
 
-  printf("%s",json_object_to_json_string(trunk));
-
   mapcache_buffer *json_file = mapcache_buffer_create(strlen(json_object_to_json_string(trunk)),ctx->pool);
   mapcache_buffer_append(json_file,strlen(json_object_to_json_string(trunk)),json_object_to_json_string(trunk));
+
+  json_object_put(trunk);
+
+  json_object_put(keys);
+  json_object_put(utf_key_array);
+  json_object_put(utf_key);
+  json_object_put(utf_data_element);
+  json_object_put(grid);
+
+  if(elementInGrid > 0)
+    json_object_put(utf_data_buffer);
 
   return json_file;
 
@@ -439,12 +458,15 @@ int wc_to_utf8(char *utf8char, int32_t char_code)
 void utfgridUpdateChar(mapcache_image *img, uint32_t oldChar, uint32_t newChar)
 {
   int i,bufferLength;
+  int32_t *char_code;
 
   bufferLength = img->h * img->w;
 
   for(i=0;i<bufferLength;i++){
-    if(img->data[i*4] == oldChar)
-      img->data[i*4] = newChar;
+    char_code = &img->data[i*4];
+
+    if(*char_code == oldChar)
+      *char_code = newChar;
   }
 }
 
@@ -453,9 +475,10 @@ void utfgridUpdateChar(mapcache_image *img, uint32_t oldChar, uint32_t newChar)
 int utfgridCleanData(mapcache_context *ctx, mapcache_image *img, mapcache_utf_data **dataPointer)
 {
   int * usedChar;
-  int i,bufferLength,itemFound,dataCounter,itemInArray;
+  int i,bufferLength,itemFound,dataCounter;
   unsigned char utfvalue;
   mapcache_utf_data* updatedData;
+  int32_t *char_code;
 
   bufferLength = img->h * img->w;
 
@@ -469,27 +492,17 @@ int utfgridCleanData(mapcache_context *ctx, mapcache_image *img, mapcache_utf_da
 
   for(i=0;i<bufferLength;i++)
   {
-    if(utf_decode(img->data[i*4]) != 0 && usedChar[utf_decode(img->data[i*4])-1]==0)
+    char_code = &img->data[i*4];
+    if(utf_decode(*char_code) != 0 && usedChar[utf_decode(*char_code)-1]==0)
     {
       itemFound++;
-      usedChar[utf_decode(img->data[i*4])-1] = 1;
-      printf("data:%d, value:%d, itemfound:%d\n",img->data[i*4],utf_decode(img->data[i*4])-1,itemFound);
+      usedChar[utf_decode(*char_code)-1] = 1;
     }
   }
   
-  itemInArray = 0;
-
-  for(i=0; i<img->nb_utf_item; i++)
-  {
-    if(usedChar[i] == 1)
-      itemInArray ++;
-  }
-
-  printf("Item in array:%d\nItem Found:%d\n",itemInArray, itemFound);
-
   updatedData = *dataPointer;
 
-  updatedData = (mapcache_utf_data*)apr_pcalloc(ctx->pool, itemInArray*sizeof(mapcache_utf_data));
+  updatedData = (mapcache_utf_data*)apr_pcalloc(ctx->pool, itemFound*sizeof(mapcache_utf_data));
   dataCounter = 0;
 
   for(i=0; i< img->nb_utf_item; i++){
@@ -506,12 +519,5 @@ int utfgridCleanData(mapcache_context *ctx, mapcache_image *img, mapcache_utf_da
     }
   }
 
-  printf("Missed stuff:\n");
-  for(i=0; i<img->nb_utf_item; i++)
-  {
-    if(usedChar[i] == 1)
-      printf("%d\n",i);
-  }
-
-  return itemInArray;
+  return itemFound;
 }
